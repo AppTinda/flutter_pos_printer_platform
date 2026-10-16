@@ -230,11 +230,10 @@ class BluetoothConnection constructor(handler: Handler) : IBluetoothConnection {
                 return
             }
 
-            // Always cancel discovery because it will slow down a connection
-            mAdapter.cancelDiscovery()
-
             // Make a connection to the BluetoothSocket
             try {
+                // Always cancel discovery because it will slow down a connection
+                mAdapter.cancelDiscovery()
                 // This is a blocking call and will only return on a
                 // successful connection or an exception
                 mmSocket.connect()
@@ -255,6 +254,23 @@ class BluetoothConnection constructor(handler: Handler) : IBluetoothConnection {
                 try {
                     mmSocket.close()
                 } catch (e2: IOException) {
+                }
+                synchronized(this@BluetoothConnection) { mConnectThread = null }
+                connectionFailed(mmResult)
+                return
+            } catch (e: SecurityException) {
+                // The system refused the connection for lack of a Bluetooth
+                // permission: BLUETOOTH_CONNECT / BLUETOOTH_SCAN not granted on
+                // Android 12+, or an OEM stack (e.g. Xiaomi) that still enforces
+                // the legacy BLUETOOTH permission at connect time. Left uncaught
+                // it kills the whole process from this background thread, and
+                // the auto-reconnect loop re-arms it every few seconds. Report a
+                // failed connection like any other refused socket instead.
+                Log.e(TAG, "connect() refused by the system: ${e.message}")
+                try {
+                    mmSocket.close()
+                } catch (e2: IOException) {
+                    Log.e(TAG, "unable to close() socket during connection failure")
                 }
                 synchronized(this@BluetoothConnection) { mConnectThread = null }
                 connectionFailed(mmResult)
