@@ -163,18 +163,27 @@ class BluetoothConnection constructor(handler: Handler) : IBluetoothConnection {
      * @param out The bytes to write
      * @see ConnectedThread.write
      */
-    override fun write(out: ByteArray?) {
+    override fun write(out: ByteArray?): Boolean {
         // Create temporary object
         var r: ConnectedThread?
         // Synchronize a copy of the ConnectedThread
         synchronized(this) {
-            if (mState != BluetoothConstants.STATE_CONNECTED) return
+            if (mState != BluetoothConstants.STATE_CONNECTED) return false
             r = mConnectedThread
         }
         // Perform the write unsynchronized
-        r!!.write(out)
+        return r?.write(out) ?: false
+    }
 
-//        Log.d(BluetoothConnection.TAG, "envia: " + new String(out));
+    /**
+     * A write hit a closed socket: the printer went to sleep, out of range or
+     * reset while we still believed we were connected. Drop the threads and go
+     * back to STATE_NONE so the next connect() opens a fresh socket, instead of
+     * every later print "succeeding" into a dead one.
+     */
+    private fun writeFailed() {
+        Log.w(TAG, "write failed - the Bluetooth link is gone")
+        stop()
     }
 
     /**
@@ -343,25 +352,25 @@ class BluetoothConnection constructor(handler: Handler) : IBluetoothConnection {
          *
          * @param bytes The bytes to write
          */
-        fun write(bytes: ByteArray?) {
-//            Log.d(TAG, "envia ConnectedThread MESSAGE_SEND_BT_CMD " + String(bytes!!))
+        /**
+         * Writes [bytes] to the socket. Returns false — and marks the link lost —
+         * when the stream throws: the old code swallowed the IOException behind
+         * an English toast and the caller was told the print succeeded.
+         */
+        fun write(bytes: ByteArray?): Boolean {
             try {
                 mmOutStream?.write(bytes)
+                mmOutStream?.flush()
             } catch (e: IOException) {
-//                Log.e(TAG, "Exception during write", e)
-                // Send a failure message back to the activity.
-                val writeErrorMsg = mHandler.obtainMessage(BluetoothConstants.MESSAGE_TOAST)
-                val bundle = Bundle().apply {
-                    putInt(TOAST, R.string.fail_write_data)
-                }
-                writeErrorMsg.data = bundle
-                mHandler.sendMessage(writeErrorMsg)
-                return
+                Log.e(TAG, "Exception during write: ${e.message}")
+                writeFailed()
+                return false
             }
 
             // Share the sent message back to the UI Activity
             val writtenMsg = mHandler.obtainMessage(BluetoothConstants.MESSAGE_WRITE, -1, -1, mmBuffer)
             writtenMsg.sendToTarget()
+            return true
         }
 
         fun cancel() {
